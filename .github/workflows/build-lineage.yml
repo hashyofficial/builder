@@ -1,0 +1,148 @@
+name: LineageOS yunluo builder
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-lineage.yml"
+      - "local_manifests/**"
+      - "scripts/**"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Validate only or attempt full ROM build"
+        type: choice
+        required: true
+        default: validate
+        options:
+          - validate
+          - build
+      runner:
+        description: "Full builds need a high-storage self-hosted runner"
+        type: choice
+        required: true
+        default: self-hosted
+        options:
+          - self-hosted
+          - ubuntu-24.04
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lineage-yunluo-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate device configurations (no Android source download)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout launcher
+        uses: actions/checkout@v4
+      - name: Verify XML and upstream LineageOS/device branches
+        run: python3 scripts/validate_manifest.py local_manifests/yunluo.xml
+
+  build:
+    name: Build unofficial LineageOS 23.0 for yunluo
+    needs: validate
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'build' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 360
+    env:
+      USE_CCACHE: "0"
+      BUILD_JOBS: "4"
+      WORKTREE: ${{ github.workspace }}/android
+    steps:
+      - name: Checkout launcher
+        uses: actions/checkout@v4
+
+      - name: Verify runner storage and architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          df -h .
+          free -h
+          if [[ "$(uname -m)" != "x86_64" ]]; then
+            echo "::error::An x86_64 Linux build host is required."
+            exit 1
+          fi
+          free_gib="$(df -Pk . | awk 'NR==2 { print int($4/1024/1024) }')"
+          echo "Available disk: ${free_gib} GiB"
+          if (( free_gib < 240 )); then
+            echo "::error::Not enough disk space for full LineageOS source + outputs: ${free_gib} GiB free; need at least 240 GiB (300+ recommended). Standard GitHub-hosted runners are too small. Use a large self-hosted runner."
+            exit 1
+          fi
+
+      - name: Install host packages and repo tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates curl flex g++-multilib gcc-multilib \
+            git git-lfs gperf liblz4-tool libncurses-dev libssl-dev libxml2-utils \
+            lzop python3 rsync unzip zip zlib1g-dev
+          mkdir -p "$HOME/bin"
+          curl --fail --location --retry 3 \
+            https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          git lfs install
+
+      - name: Initialize LineageOS base and custom device manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORKTREE"
+          cd "$WORKTREE"
+          repo init -u https://github.com/LineageOS/android.git \
+            -b lineage-23.0 --depth=1 --partial-clone --clone-filter=blob:none \
+            --no-clone-bundle
+          mkdir -p .repo/local_manifests
+          cp "$GITHUB_WORKSPACE/local_manifests/yunluo.xml" .repo/local_manifests/yunluo.xml
+          repo manifest -o "$RUNNER_TEMP/resolved-yunluo.xml"
+          echo "Manifest configured for yunluo."
+
+      - name: Sync required platform and device sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORKTREE"
+          repo sync -c -j4 --fail-fast --no-clone-bundle --no-tags --optimized-fetch
+
+      - name: Compile ROM and OTA zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORKTREE"
+          source build/envsetup.sh
+          lunch lineage_yunluo-userdebug
+          m -j"$BUILD_JOBS" bacon
+
+      - name: Produce SHA256 checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$WORKTREE/out/target/product/yunluo"
+          shopt -s nullglob
+          zips=(lineage-*.zip)
+          if (( ${#zips[@]} == 0 )); then
+            echo "::error::No LineageOS ROM ZIP was produced"
+            exit 1
+          fi
+          sha256sum "${zips[@]}" > SHA256SUMS.txt
+
+      - name: Upload ROM ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: lineage-23.0-yunluo-UNOFFICIAL
+          path: |
+            android/out/target/product/yunluo/lineage-*.zip
+            android/out/target/product/yunluo/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
