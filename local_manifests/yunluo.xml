@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+    <!-- LineageOS 23.0 / Android 16: Xiaomi Redmi Pad (yunluo) -->
+    <remote name="mt6789-devs"
+            fetch="https://github.com/xiaomi-mt6789-devs"
+            revision="refs/heads/lineage-23.0" />
+    <remote name="lineage-xiaomi"
+            fetch="https://github.com/LineageOS"
+            revision="refs/heads/lineage-23.0" />
+
+    <project name="android_device_xiaomi_yunluo"
+             path="device/xiaomi/yunluo" remote="mt6789-devs" />
+    <!-- Use the prebuilt kernel, DTB and modules; avoid enormous kernel sources. -->
+    <project name="android_device_xiaomi_yunluo-kernel"
+             path="device/xiaomi/yunluo-kernel" remote="mt6789-devs" />
+    <project name="android_device_mediatek_sepolicy_vndr"
+             path="device/mediatek/sepolicy_vndr" remote="mt6789-devs" />
+    <project name="android_hardware_mediatek"
+             path="hardware/mediatek" remote="mt6789-devs" />
+    <project name="android_hardware_xiaomi"
+             path="hardware/xiaomi" remote="lineage-xiaomi" />
+    <project name="android_vendor_xiaomi_yunluo"
+             path="vendor/xiaomi/yunluo" remote="mt6789-devs" />
+</manifest>
